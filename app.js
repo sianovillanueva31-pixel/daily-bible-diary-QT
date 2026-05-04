@@ -1,10 +1,3 @@
-// --- FIREBASE CONFIGURATION INSTRUCTIONS ---
-// 1. Go to console.firebase.google.com and create a project.
-// 2. Enable "Authentication" (Email/Password provider).
-// 3. Enable "Firestore Database" (Start in Test Mode or set rules allowing authenticated user access:
-//    match /entries/{docId} { allow read, write: if request.auth != null && request.auth.uid == resource.data.userId; } )
-// 4. Register a web app and replace the firebaseConfig object below with your keys.
-
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
 import { 
     getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, 
@@ -14,38 +7,34 @@ import {
     getFirestore, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp 
 } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
+// --- PASTE YOUR FIREBASE CONFIG BELOW ---
 const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
+    apiKey: "YOUR_ACTUAL_API_KEY_HERE",
     authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
     projectId: "YOUR_PROJECT_ID",
     storageBucket: "YOUR_PROJECT_ID.appspot.com",
-    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+    messagingSenderId: "YOUR_SENDER_ID",
     appId: "YOUR_APP_ID"
 };
+// --- END OF CONFIG ---
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// --- STATE MANAGEMENT ---
 let isSignUpMode = false;
 let currentUser = null;
 
-// --- UI NAVIGATION ---
 window.showPage = (pageId) => {
     ['landing-page', 'auth-page', 'dashboard-page', 'entries-page'].forEach(id => {
-        document.getElementById(id).classList.add('hidden');
+        const el = document.getElementById(id);
+        if (el) el.classList.add('hidden');
     });
-    document.getElementById(pageId).classList.remove('hidden');
+    const target = document.getElementById(pageId);
+    if (target) target.classList.remove('hidden');
     window.scrollTo(0, 0);
 };
 
-document.getElementById('nav-logo').addEventListener('click', () => {
-    if (currentUser) showPage('dashboard-page');
-    else showPage('landing-page');
-});
-
-// --- AUTHENTICATION LOGIC ---
 window.toggleAuthMode = () => {
     isSignUpMode = !isSignUpMode;
     document.getElementById('auth-title').innerText = isSignUpMode ? "Create Account" : "Sign In";
@@ -55,19 +44,134 @@ window.toggleAuthMode = () => {
     document.getElementById('auth-error').classList.add('hidden');
 };
 
-document.getElementById('auth-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const email = document.getElementById('auth-email').value;
-    const password = document.getElementById('auth-password').value;
-    const errorEl = document.getElementById('auth-error');
-    const btn = document.getElementById('auth-submit-btn');
-    
-    btn.innerText = "Loading...";
-    btn.disabled = true;
+const authForm = document.getElementById('auth-form');
+if (authForm) {
+    authForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = document.getElementById('auth-email').value;
+        const password = document.getElementById('auth-password').value;
+        const errorEl = document.getElementById('auth-error');
+        const btn = document.getElementById('auth-submit-btn');
+        
+        btn.innerText = "Processing...";
+        btn.disabled = true;
 
+        try {
+            if (isSignUpMode) {
+                await createUserWithEmailAndPassword(auth, email, password);
+            } else {
+                await signInWithEmailAndPassword(auth, email, password);
+            }
+        } catch (error) {
+            errorEl.innerText = error.message.replace('Firebase:', '').trim();
+            errorEl.classList.remove('hidden');
+            btn.innerText = isSignUpMode ? "Sign Up" : "Sign In";
+            btn.disabled = false;
+        }
+    });
+}
+
+const logoutBtn = document.getElementById('logout-btn');
+if (logoutBtn) logoutBtn.addEventListener('click', () => signOut(auth));
+
+onAuthStateChanged(auth, (user) => {
+    currentUser = user;
+    const navAuth = document.getElementById('nav-auth-buttons');
+    const navApp = document.getElementById('nav-app-buttons');
+    if (user) {
+        navAuth?.classList.add('hidden');
+        navApp?.classList.remove('hidden');
+        navApp?.classList.add('flex');
+        setDailyData();
+        showPage('dashboard-page');
+    } else {
+        navAuth?.classList.remove('hidden');
+        navApp?.classList.add('hidden');
+        navApp?.classList.remove('flex');
+        showPage('landing-page');
+    }
+});
+
+async function setDailyData() {
+    const dateEl = document.getElementById('current-date');
+    if (dateEl) {
+        dateEl.innerText = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    }
     try {
-        if (isSignUpMode) {
-            await createUserWithEmailAndPassword(auth, email, password);
+        const res = await fetch('https://labs.bible.org/api/?passage=random&type=json');
+        const data = await res.json();
+        document.getElementById('daily-verse').innerText = `"${data[0].text}"`;
+        document.getElementById('daily-verse-ref').innerText = `- ${data[0].bookname} ${data[0].chapter}:${data[0].verse}`;
+    } catch (e) {
+        document.getElementById('daily-verse').innerText = '"The Lord is my shepherd; I shall not want."';
+        document.getElementById('daily-verse-ref').innerText = '- Psalm 23:1';
+    }
+}
+
+const journalForm = document.getElementById('journal-form');
+if (journalForm) {
+    journalForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const btn = document.getElementById('save-entry-btn');
+        const status = document.getElementById('save-status');
+        const title = document.getElementById('entry-title');
+        const content = document.getElementById('entry-content');
+
+        btn.disabled = true;
+        btn.innerText = "Saving...";
+
+        try {
+            await addDoc(collection(db, "entries"), {
+                userId: currentUser.uid,
+                title: title.value,
+                content: content.value,
+                date: new Date().toISOString(),
+                timestamp: serverTimestamp()
+            });
+            status.innerText = "Saved Successfully! ✨";
+            status.className = "text-green-600 font-bold opacity-100";
+            title.value = '';
+            content.value = '';
+            setTimeout(() => status.classList.add('opacity-0'), 3000);
+        } catch (err) {
+            status.innerText = "Error saving. Check Firestore Rules.";
+            status.className = "text-red-600 font-bold opacity-100";
+        } finally {
+            btn.disabled = false;
+            btn.innerText = "Save Entry";
+        }
+    });
+}
+
+window.loadEntries = async () => {
+    showPage('entries-page');
+    const list = document.getElementById('entries-list');
+    list.innerHTML = '<p class="text-center text-gray-500">Loading your journey...</p>';
+    try {
+        const q = query(collection(db, "entries"), where("userId", "==", currentUser.uid), orderBy("date", "desc"));
+        const snap = await getDocs(q);
+        if (snap.empty) {
+            list.innerHTML = '<p class="text-center text-gray-500">No entries yet. Start writing!</p>';
+            return;
+        }
+        let html = '';
+        snap.forEach(doc => {
+            const d = doc.data();
+            const dateStr = new Date(d.date).toLocaleDateString();
+            html += `
+            <div class="bg-white p-6 rounded-xl shadow-sm mb-4 border border-gray-100">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="font-bold text-indigo-900">${d.title}</h3>
+                    <span class="text-xs text-gray-400">${dateStr}</span>
+                </div>
+                <p class="text-gray-600 whitespace-pre-wrap">${d.content}</p>
+            </div>`;
+        });
+        list.innerHTML = html;
+    } catch (err) {
+        list.innerHTML = `<p class="text-red-500 text-center">Error: ${err.message}</p>`;
+    }
+};            await createUserWithEmailAndPassword(auth, email, password);
         } else {
             await signInWithEmailAndPassword(auth, email, password);
         }
