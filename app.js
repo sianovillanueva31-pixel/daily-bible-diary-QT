@@ -1,11 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
-import { 
-    getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, 
-    onAuthStateChanged, signOut 
-} from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
-import { 
-    getFirestore, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp 
-} from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+import { getFirestore, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
 // --- PASTE YOUR FIREBASE CONFIG BELOW ---
 const firebaseConfig = {
@@ -21,53 +16,101 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-
-let isSignUpMode = false;
 let currentUser = null;
+
+// SILENT AUTO-LOGIN
+onAuthStateChanged(auth, async (user) => {
+    if (user) {
+        currentUser = user;
+        setDailyData();
+        showPage('dashboard-page');
+    } else {
+        try {
+            await signInAnonymously(auth);
+        } catch (error) {
+            console.error("Auth Error:", error);
+            alert("Connection error. Please check your Firebase API Key.");
+        }
+    }
+});
 
 window.showPage = (pageId) => {
     ['landing-page', 'auth-page', 'dashboard-page', 'entries-page'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.classList.add('hidden');
     });
-    const target = document.getElementById(pageId);
-    if (target) target.classList.remove('hidden');
-    window.scrollTo(0, 0);
+    document.getElementById(pageId)?.classList.remove('hidden');
 };
 
-window.toggleAuthMode = () => {
-    isSignUpMode = !isSignUpMode;
-    document.getElementById('auth-title').innerText = isSignUpMode ? "Create Account" : "Sign In";
-    document.getElementById('auth-submit-btn').innerText = isSignUpMode ? "Sign Up" : "Sign In";
-    document.getElementById('auth-toggle-text').innerText = isSignUpMode ? "Already have an account?" : "Don't have an account?";
-    document.getElementById('auth-toggle-btn').innerText = isSignUpMode ? "Sign In" : "Sign Up";
-    document.getElementById('auth-error').classList.add('hidden');
-};
+async function setDailyData() {
+    document.getElementById('current-date').innerText = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    try {
+        const res = await fetch('https://labs.bible.org/api/?passage=random&type=json');
+        const data = await res.json();
+        document.getElementById('daily-verse').innerText = `"${data[0].text}"`;
+        document.getElementById('daily-verse-ref').innerText = `- ${data[0].bookname} ${data[0].chapter}:${data[0].verse}`;
+    } catch (e) {
+        document.getElementById('daily-verse').innerText = '"The Lord is my shepherd; I shall not want."';
+        document.getElementById('daily-verse-ref').innerText = '- Psalm 23:1';
+    }
+}
 
-const authForm = document.getElementById('auth-form');
-if (authForm) {
-    authForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const email = document.getElementById('auth-email').value;
-        const password = document.getElementById('auth-password').value;
-        const errorEl = document.getElementById('auth-error');
-        const btn = document.getElementById('auth-submit-btn');
-        
-        btn.innerText = "Processing...";
-        btn.disabled = true;
+document.getElementById('journal-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('save-entry-btn');
+    const status = document.getElementById('save-status');
+    const title = document.getElementById('entry-title');
+    const content = document.getElementById('entry-content');
 
-        try {
-            if (isSignUpMode) {
-                await createUserWithEmailAndPassword(auth, email, password);
-            } else {
-                await signInWithEmailAndPassword(auth, email, password);
-            }
-        } catch (error) {
-            errorEl.innerText = error.message.replace('Firebase:', '').trim();
-            errorEl.classList.remove('hidden');
-            btn.innerText = isSignUpMode ? "Sign Up" : "Sign In";
-            btn.disabled = false;
+    btn.disabled = true;
+    btn.innerText = "Saving...";
+
+    try {
+        await addDoc(collection(db, "entries"), {
+            userId: currentUser.uid,
+            title: title.value,
+            content: content.value,
+            date: new Date().toISOString(),
+            timestamp: serverTimestamp()
+        });
+        status.innerText = "Saved Successfully! ✨";
+        status.className = "text-green-600 font-bold opacity-100";
+        title.value = '';
+        content.value = '';
+        setTimeout(() => status.classList.add('opacity-0'), 3000);
+    } catch (err) {
+        status.innerText = "Error: Check Firestore Rules";
+        status.className = "text-red-600 font-bold opacity-100";
+    } finally {
+        btn.disabled = false;
+        btn.innerText = "Save Entry";
+    }
+});
+
+window.loadEntries = async () => {
+    showPage('entries-page');
+    const list = document.getElementById('entries-list');
+    list.innerHTML = '<p class="text-center text-gray-500">Loading...</p>';
+    try {
+        const q = query(collection(db, "entries"), where("userId", "==", currentUser.uid), orderBy("date", "desc"));
+        const snap = await getDocs(q);
+        if (snap.empty) {
+            list.innerHTML = '<p class="text-center text-gray-500">No entries found.</p>';
+            return;
         }
+        let html = '';
+        snap.forEach(doc => {
+            const d = doc.data();
+            html += `<div class="bg-white p-6 rounded-xl shadow-sm mb-4 border border-gray-100">
+                <h3 class="font-bold text-indigo-900">${d.title}</h3>
+                <p class="text-gray-600 whitespace-pre-wrap mt-2">${d.content}</p>
+            </div>`;
+        });
+        list.innerHTML = html;
+    } catch (err) {
+        list.innerHTML = `<p class="text-red-500 text-center">${err.message}</p>`;
+    }
+};        }
     });
 }
 
