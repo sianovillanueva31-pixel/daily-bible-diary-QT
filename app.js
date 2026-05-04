@@ -1,60 +1,112 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
-import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
-import { getFirestore, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+import { 
+    getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, 
+    onAuthStateChanged, signOut 
+} from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+import { 
+    getFirestore, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp 
+} from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
-// --- PASTE YOUR FIREBASE CONFIG BELOW ---
+// --- PASTE YOUR ACTUAL FIREBASE CONFIG HERE ---
 const firebaseConfig = {
-    apiKey: "YOUR_ACTUAL_API_KEY_HERE",
-    authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-    projectId: "YOUR_PROJECT_ID",
-    storageBucket: "YOUR_PROJECT_ID.appspot.com",
-    messagingSenderId: "YOUR_SENDER_ID",
-    appId: "YOUR_APP_ID"
+    apiKey: "AIza...", // Should start with AIza
+    authDomain: "your-project.firebaseapp.com",
+    projectId: "your-project-id",
+    storageBucket: "your-project.appspot.com",
+    messagingSenderId: "123456789",
+    appId: "1:12345:web:abcde"
 };
-// --- END OF CONFIG ---
 
+// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+
+let isSignUpMode = false;
 let currentUser = null;
 
-// SILENT AUTO-LOGIN
-onAuthStateChanged(auth, async (user) => {
-    if (user) {
-        currentUser = user;
-        setDailyData();
-        showPage('dashboard-page');
-    } else {
-        try {
-            await signInAnonymously(auth);
-        } catch (error) {
-            console.error("Auth Error:", error);
-            alert("Connection error. Please check your Firebase API Key.");
-        }
-    }
-});
-
+// Global Page Switcher
 window.showPage = (pageId) => {
-    ['landing-page', 'auth-page', 'dashboard-page', 'entries-page'].forEach(id => {
+    const pages = ['landing-page', 'auth-page', 'dashboard-page', 'entries-page'];
+    pages.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.classList.add('hidden');
     });
     document.getElementById(pageId)?.classList.remove('hidden');
 };
 
+// Auth Toggle (Sign In <-> Sign Up)
+window.toggleAuthMode = () => {
+    isSignUpMode = !isSignUpMode;
+    document.getElementById('auth-title').innerText = isSignUpMode ? "Create Account" : "Sign In";
+    document.getElementById('auth-submit-btn').innerText = isSignUpMode ? "Sign Up" : "Sign In";
+    document.getElementById('auth-toggle-btn').innerText = isSignUpMode ? "Sign In" : "Sign Up";
+    document.getElementById('auth-error').classList.add('hidden');
+};
+
+// Handle Auth Form
+document.getElementById('auth-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('auth-email').value;
+    const password = document.getElementById('auth-password').value;
+    const btn = document.getElementById('auth-submit-btn');
+    const errorEl = document.getElementById('auth-error');
+
+    btn.disabled = true;
+    btn.innerText = "Authenticating...";
+
+    try {
+        if (isSignUpMode) {
+            await createUserWithEmailAndPassword(auth, email, password);
+        } else {
+            await signInWithEmailAndPassword(auth, email, password);
+        }
+    } catch (error) {
+        errorEl.innerText = error.message;
+        errorEl.classList.remove('hidden');
+        btn.disabled = false;
+        btn.innerText = isSignUpMode ? "Sign Up" : "Sign In";
+    }
+});
+
+// Logout
+document.getElementById('logout-btn').addEventListener('click', () => signOut(auth));
+
+// Auth State Observer
+onAuthStateChanged(auth, (user) => {
+    currentUser = user;
+    const navAuth = document.getElementById('nav-auth-buttons');
+    const navApp = document.getElementById('nav-app-buttons');
+
+    if (user) {
+        navAuth.classList.add('hidden');
+        navApp.classList.remove('hidden');
+        navApp.classList.add('flex');
+        setDailyData();
+        showPage('dashboard-page');
+    } else {
+        navAuth.classList.remove('hidden');
+        navApp.classList.add('hidden');
+        navApp.classList.remove('flex');
+        showPage('landing-page');
+    }
+});
+
+// Load Verse and Date
 async function setDailyData() {
-    document.getElementById('current-date').innerText = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    document.getElementById('current-date').innerText = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
     try {
         const res = await fetch('https://labs.bible.org/api/?passage=random&type=json');
         const data = await res.json();
         document.getElementById('daily-verse').innerText = `"${data[0].text}"`;
         document.getElementById('daily-verse-ref').innerText = `- ${data[0].bookname} ${data[0].chapter}:${data[0].verse}`;
     } catch (e) {
-        document.getElementById('daily-verse').innerText = '"The Lord is my shepherd; I shall not want."';
-        document.getElementById('daily-verse-ref').innerText = '- Psalm 23:1';
+        document.getElementById('daily-verse').innerText = '"Be still, and know that I am God."';
+        document.getElementById('daily-verse-ref').innerText = '- Psalm 46:10';
     }
 }
 
+// Save Entry
 document.getElementById('journal-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = document.getElementById('save-entry-btn');
@@ -68,6 +120,57 @@ document.getElementById('journal-form').addEventListener('submit', async (e) => 
     try {
         await addDoc(collection(db, "entries"), {
             userId: currentUser.uid,
+            title: title.value,
+            content: content.value,
+            date: new Date().toISOString(),
+            timestamp: serverTimestamp()
+        });
+        status.innerText = "Entry Saved! ✨";
+        status.className = "text-green-600 font-bold opacity-100";
+        title.value = '';
+        content.value = '';
+        setTimeout(() => status.classList.add('opacity-0'), 3000);
+    } catch (err) {
+        console.error(err);
+        status.innerText = "Save Failed: Check Database Rules";
+        status.className = "text-red-600 font-bold opacity-100";
+    } finally {
+        btn.disabled = false;
+        btn.innerText = "Save Entry";
+    }
+});
+
+// View Entries
+window.loadEntries = async () => {
+    showPage('entries-page');
+    const list = document.getElementById('entries-list');
+    list.innerHTML = '<p class="text-center py-10">Fetching your journal...</p>';
+
+    try {
+        const q = query(collection(db, "entries"), where("userId", "==", currentUser.uid), orderBy("date", "desc"));
+        const snap = await getDocs(q);
+        if (snap.empty) {
+            list.innerHTML = '<p class="text-center py-10 text-gray-500">No entries yet. Write your first reflection!</p>';
+            return;
+        }
+        let html = '';
+        snap.forEach(doc => {
+            const d = doc.data();
+            const date = new Date(d.date).toLocaleDateString();
+            html += `
+            <div class="bg-white p-6 rounded-xl shadow-sm mb-4 border border-gray-100">
+                <div class="flex justify-between items-start mb-2">
+                    <h3 class="font-bold text-indigo-900 text-lg">${d.title}</h3>
+                    <span class="text-xs text-gray-400">${date}</span>
+                </div>
+                <p class="text-gray-600 whitespace-pre-wrap">${d.content}</p>
+            </div>`;
+        });
+        list.innerHTML = html;
+    } catch (err) {
+        list.innerHTML = `<p class="text-red-500 text-center">Error: ${err.message}</p>`;
+    }
+};            userId: currentUser.uid,
             title: title.value,
             content: content.value,
             date: new Date().toISOString(),
